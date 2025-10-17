@@ -1,3 +1,5 @@
+#include <arduino.h>
+
 // Potentiometer is connected to GPIO 34 (Analog ADC1_CH6) 
 const int potPin = 34;
 
