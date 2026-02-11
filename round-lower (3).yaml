@@ -1,0 +1,702 @@
+substitutions:
+  name: "round-lower"
+  friendly_name: round_lower
+
+  default_brightness: 0.20  # conservative brightness
+
+  device1: light.eettafel
+  #allowed_characters: " ¿?¡!#%'()+,-./:°0123456789ABCDEFGHIJKLMNOPQRSTUVWYZabcdefghijklmnopqrstuvwxyzáéíóú"
+
+################################################################################################################
+
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+  min_version: 2024.11.0
+  name_add_mac_suffix: false
+  platformio_options:
+    board_build.flash_mode: dio
+    board_build.arduino.memory_type: qio_opi
+    build_flags: "-DBOARD_HAS_PSRAM"
+    board_upload.maximum_ram_size: 524288
+
+
+      
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: update_active_light_labels
+#      - delay: 1s
+      - lambda: |-
+          uint32_t c = id(ui_color1_hex);
+          uint8_t r = (c >> 16) & 0xFF;
+          uint8_t g = (c >> 8) & 0xFF;
+          uint8_t b = c & 0xFF;
+          id(ui_color1) = lv_color_make(r, g, b);
+      - lambda: |-
+          uint32_t c = id(ui_color2_hex);
+          uint8_t r = (c >> 16) & 0xFF;
+          uint8_t g = (c >> 8) & 0xFF;
+          uint8_t b = c & 0xFF;
+          id(ui_color2) = lv_color_make(r, g, b);
+      - script.execute: apply_ui_color
+      - script.execute: update_active_light_labels
+
+
+  
+  
+      
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+
+psram:
+  speed: 80MHz
+  mode: octal
+
+# Enable logging
+logger:
+  level: DEBUG 
+
+debug:
+  update_interval: 30s
+
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "Nawycj3IKuW/2BHIOJigUhOd40ld7ih8mqx0CB1X9i8="
+
+ota:
+  - platform: esphome
+    password: "05adc4d82934b416537ed335d216240f"
+
+mdns:
+  disabled: false
+  
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Round-Lower Fallback Hotspot"
+    password: "wSUYWZnlb7gd"
+
+
+<<: !include includes/_round_128b.yaml
+
+spi:
+  id: spi_bus
+  mosi_pin: GPIO13
+  clk_pin: GPIO14
+
+i2c:
+  - id: i2c_bus
+    sda: 17
+    scl: 18
+    scan: true
+    frequency: 400kHz
+
+  - id: i2c_touch
+    sda: 38
+    scl: 39
+    scan: true
+    frequency: 400kHz
+
+
+touchscreen:
+  platform: cst816
+  id: touch
+  interrupt_pin: GPIO40
+  reset_pin: GPIO16
+  i2c_id: i2c_touch
+  transform:
+    mirror_x: false
+    mirror_y: true
+    swap_xy: true
+
+  on_release:
+    then:
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - logger.log: "LVGL resuming"
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+            - light.turn_on: display_backlight
+
+
+
+sensor:
+  - platform: homeassistant
+    id: eettafel_light
+    entity_id: light.eettafel
+    attribute: brightness
+    on_value:
+      then:
+        - lambda: |-
+            float new_val = x / 255.0;
+            if (fabs(new_val - id(eettafel_brightness)) > 0.02) {
+              id(eettafel_brightness) = new_val;
+              id(update_active_light_labels).execute();
+            }
+
+  - platform: homeassistant
+    id: schemerlamp_1
+    entity_id: light.schemerlamp_1
+    attribute: brightness
+    on_value:
+      then:
+        - lambda: |-
+            float new_val = x / 255.0;
+            if (fabs(new_val - id(schemerlamp_1_brightness)) > 0.02) {
+              id(schemerlamp_1_brightness) = new_val;
+              id(update_active_light_labels).execute();
+            }
+
+  - platform: homeassistant
+    id: schemerlamp_2
+    entity_id: light.schemerlamp_2
+    attribute: brightness
+    on_value:
+      then:
+        - lambda: |-
+            float new_val = x / 255.0;
+            if (fabs(new_val - id(schemerlamp_2_brightness)) > 0.02) {
+              id(schemerlamp_2_brightness) = new_val;
+              id(update_active_light_labels).execute();
+            }
+
+
+
+  - platform: rotary_encoder
+    id: encoder
+    pin_a:
+      number: GPIO9
+      mode: { input: true, pullup: true }
+    pin_b:
+      number: GPIO10
+      mode: { input: true, pullup: true }
+
+
+  
+  #  pin_a: GPIO9
+  #  pin_b: GPIO10
+    resolution: 1
+    on_clockwise:
+      then:
+        - lambda: |-
+            // Increase brightness of active lamp
+            switch(id(active_light_index)) {
+              case 0:
+                id(eettafel_brightness) += 0.03;
+                if (id(eettafel_brightness) > 1.0) id(eettafel_brightness) = 1.0;
+                break;
+              case 1:
+                id(schemerlamp_1_brightness) += 0.03;
+                if (id(schemerlamp_1_brightness) > 1.0) id(schemerlamp_1_brightness) = 1.0;
+                break;
+              case 2:
+                id(schemerlamp_2_brightness) += 0.03;
+                if (id(schemerlamp_2_brightness) > 1.0) id(schemerlamp_2_brightness) = 1.0;
+                break;
+            }
+        - script.execute: update_active_light_labels
+        - script.execute: update_ha
+
+    on_anticlockwise:
+      then:
+        - lambda: |-
+            // Decrease brightness of active lamp
+            switch(id(active_light_index)) {
+              case 0:
+                id(eettafel_brightness) -= 0.03;
+                if (id(eettafel_brightness) < 0.0) id(eettafel_brightness) = 0.0;
+                break;
+              case 1:
+                id(schemerlamp_1_brightness) -= 0.03;
+                if (id(schemerlamp_1_brightness) < 0.0) id(schemerlamp_1_brightness) = 0.0;
+                break;
+              case 2:
+                id(schemerlamp_2_brightness) -= 0.03; 
+                if (id(schemerlamp_2_brightness) < 0.0)  id(schemerlamp_2_brightness) = 0.0;
+                break;
+            }
+        - script.execute: update_active_light_labels
+        - script.execute: update_ha
+
+
+  
+# --- Home Assistant output
+output:
+  - platform: ledc
+    pin: GPIO7
+    id: backlight_output
+
+
+  - platform: template
+    id: output_dummy_r
+    type: float
+    write_action:
+      - lambda: |-
+          // dummy, niets doen
+
+  - platform: template
+    id: output_dummy_g
+    type: float
+    write_action:
+      - lambda: |-
+          // dummy, niets doen
+
+  - platform: template
+    id: output_dummy_b
+    type: float
+    write_action:
+      - lambda: |-
+          // dummy, niets doen
+
+light:
+  - platform: monochromatic
+    id: display_backlight
+    name: "Backlight"
+    output: backlight_output
+    default_transition_length:
+      milliseconds: 0
+    initial_state:
+      brightness: 100%
+    restore_mode: ALWAYS_ON
+
+
+  - platform: rgb
+    name: "UI Accent Color1"
+    id: ui_color1_light
+    red: output_dummy_r
+    green: output_dummy_g
+    blue: output_dummy_b
+    default_transition_length: 0s
+    restore_mode: RESTORE_DEFAULT_ON
+
+    on_state:
+      then:
+        - lambda: |-
+            float br = id(ui_color1_light).current_values.get_brightness();
+            uint8_t r = (uint8_t)(id(ui_color1_light).current_values.get_red() * br * 255.0f);
+            uint8_t g = (uint8_t)(id(ui_color1_light).current_values.get_green() * br * 255.0f);
+            uint8_t b = (uint8_t)(id(ui_color1_light).current_values.get_blue() * br * 255.0f);
+            id(ui_color1_hex) = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+            id(ui_color1) = lv_color_make(r, g, b);
+
+        - script.execute: apply_ui_color
+        
+
+
+  - platform: rgb
+    name: "UI Accent Color2"
+    id: ui_color2_light
+    red: output_dummy_r
+    green: output_dummy_g
+    blue: output_dummy_b
+    default_transition_length: 0s
+    restore_mode: RESTORE_DEFAULT_ON
+
+    on_state:
+      then:
+        - lambda: |-
+            float br = id(ui_color2_light).current_values.get_brightness();
+            uint8_t r = (uint8_t)(id(ui_color2_light).current_values.get_red() * br * 255.0f);
+            uint8_t g = (uint8_t)(id(ui_color2_light).current_values.get_green() * br * 255.0f);
+            uint8_t b = (uint8_t)(id(ui_color2_light).current_values.get_blue() * br * 255.0f);
+
+            id(ui_color2_hex) = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+            id(ui_color2) = lv_color_make(r, g, b);
+
+        - script.execute: apply_ui_color
+        
+
+number:
+  - platform: template
+    name: LVGL Screen timeout
+    optimistic: true
+    id: display_timeout
+    unit_of_measurement: "s"
+    initial_value: 45
+    restore_value: true
+    min_value: 10
+    max_value: 180
+    step: 5
+    mode: box
+
+
+
+
+
+
+
+switch:
+  - platform: template
+    id: screensaver_enabled
+    name: "Screensaver enabled"
+    optimistic: true
+
+  - platform: template
+    name: Antiburn
+    id: switch_antiburn
+    icon: mdi:television-shimmer
+    optimistic: true
+    entity_category: "config"
+    turn_on_action:
+      - logger.log: "Starting Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+      - lvgl.pause:
+          show_snow: true
+    turn_off_action:
+      - logger.log: "Stopping Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+
+
+
+
+packages:
+  colors: !include colors/HOMEASSISTANT
+
+
+globals:
+  - id: ui_color1_hex
+    type: uint32_t
+    restore_value: true
+    initial_value: '0x0CFF06'   # startkleur
+
+  - id: ui_color2_hex
+    type: uint32_t
+    restore_value: true
+    initial_value: '0x0CFF06'   # startkleur
+
+
+  - id: ui_color1
+    type: lv_color_t
+    initial_value: 'lv_color_hex(0x0CFF06)'
+
+  - id: ui_color2
+    type: lv_color_t
+    initial_value: 'lv_color_hex(0x0CFF06)'
+
+
+  - id: active_lvgl_page
+    type: std::string
+
+  - id: eettafel_brightness
+    type: float
+    initial_value: '.28'
+
+  - id: schemerlamp_1_brightness
+    type: float
+    initial_value: '.28'
+
+  - id: schemerlamp_2_brightness
+    type: float
+    initial_value: '.28'
+
+
+  - id: active_light_index
+    type: int
+    initial_value: '0'
+
+
+binary_sensor:
+  - platform: gpio
+    name: Button
+    id: front_button
+    pin: 
+      number: GPIO6
+      inverted: True
+    on_press:
+      then:
+        - logger.log: "button pressed"
+        - script.execute: cycle_lights
+        - script.execute: update_active_light_labels
+
+
+display:
+  - platform: ili9xxx
+    id: round_display
+    model: GC9A01A
+    cs_pin: GPIO15
+    reset_pin: GPIO11
+    dc_pin: GPIO21
+    invert_colors: true
+    auto_clear_enabled: false
+    color_order: bgr
+    rotation: 180
+
+
+lvgl:
+  on_idle:
+    timeout: !lambda "return id(display_timeout).state * 1000;"
+    then:
+      - if:
+          condition:
+            switch.is_on: screensaver_enabled
+          then:
+            - light.turn_off: display_backlight
+            - lvgl.pause: {}
+
+  bg_color: black
+  scrollbar_mode: "OFF"
+  default_font: roboto_med
+  text_color: white
+  style_definitions:
+    - id: style_menu_button
+      align: CENTER
+      bg_opa: TRANSP
+      shadow_opa: TRANSP
+      height: 50
+      width: 50
+      radius: 50%
+
+    - id: style_menu_button_label
+      align: CENTER
+      y: 3
+      text_font: roboto_med
+
+    - id: arc_bg
+      bg_opa: TRANSP
+      arc_color: 0x2A2A2A     # inactieve ring
+      arc_width: 24
+      arc_rounded: true
+
+    - id: arc_indicator_heat
+      arc_color: 0xFF8C1A     # Nest-oranje
+      arc_width: 24
+      arc_rounded: true
+
+    - id: center_text
+      text_color: 0xEDEDED
+      text_font: montserrat_48
+
+  pages:
+    - id: main_page
+      on_load:
+        - script.execute: apply_ui_color
+
+      on_unload:
+        - lvgl.widget.disable: []
+
+      widgets:
+        - arc:
+                id: setpoint_arc
+                align: CENTER
+                width: 240
+                height: 240
+                #adjustable: true
+                adjustable: false
+
+                # schaal in 0.1°C
+                min_value: 1
+                max_value: 100
+                value: 205         # start op 20.5°C
+
+                # Nest-achtige "open" ring (gap onder)
+                start_angle: 135
+                end_angle: 45
+                rotation: 0
+                arc_width: 24
+                change_rate: 720   # default uit ESPHome docs
+
+                # Stijl van de waarde-indicator (het "gevulde" deel)
+                indicator:
+                  arc_width: 24
+                  arc_color: !lambda return id(ui_color2);
+        - obj:
+            id: mode_bg
+            height: 140
+            width: 140
+            radius: 70
+            align: CENTER
+            border_width: 0
+            bg_color: black
+        - label:
+            id: set_label
+            align: CENTER
+            y: +18
+            text_color: white
+            text_font: roboto_huge
+            text: "--"
+        - label:
+            id: mode_label1
+            align: CENTER
+            y: -60
+            text_font: roboto_med
+            text: "Eet"
+        - label:
+            id: mode_label2
+            align: CENTER
+            y: -36
+            text_font: roboto_med
+            text: "Tafel"
+        - label:
+            id: celsius_label
+            align: CENTER
+            x: 60
+            y: +4
+            text_font: roboto_med
+            text: "%"
+
+
+
+
+script:
+  - id: update_active_light_labels
+    then:
+      - if:
+          condition: 
+            lambda: "return id(active_light_index) == 0;"
+          then:
+            - lvgl.label.update:
+                id: mode_label1
+                text: "Eet"
+            - lvgl.label.update:
+                id: mode_label2
+                text: "Tafel"
+            - lvgl.label.update:
+                id: set_label
+                text: !lambda |-
+                  char buf[8];
+                  sprintf(buf, "%.0f", id(eettafel_brightness)*100);
+                  return buf;
+
+            - lvgl.arc.update:
+                id: setpoint_arc
+                value: !lambda "return id(eettafel_brightness) * 100;"
+         
+            #- lvgl.indicator.update:
+            #    id: set_temp_needle  # het indicator ID in de meter
+            #    value: !lambda "return id(eettafel_brightness) * 100;"
+
+      - if:
+          condition:
+             lambda: "return id(active_light_index) == 1;"
+          then:
+            - lvgl.label.update:
+                id: mode_label1
+                text: "Schemer"
+            - lvgl.label.update:
+                id: mode_label2
+                text: "Lamp 1"
+            - lvgl.label.update:
+                id: set_label
+                text: !lambda |-
+                  char buf[8];
+                  sprintf(buf, "%.0f", id(schemerlamp_1_brightness)*100);
+                  return buf;
+            - lvgl.arc.update:
+                id: setpoint_arc
+                value: !lambda "return id(schemerlamp_1_brightness) * 100;"
+            #- lvgl.indicator.update:
+            #    id: set_temp_needle  # het indicator ID in de meter
+            #    value: !lambda "return id(schemerlamp_1_brightness) * 100;"
+
+      - if:
+          condition:
+             lambda: "return id(active_light_index) == 2;"
+          then:
+            - lvgl.label.update:
+                id: mode_label1
+                text: "Schemer"
+            - lvgl.label.update:
+                id: mode_label2
+                text: "Lamp 2"
+                  # update label
+            - lvgl.label.update:
+                id: set_label
+                text: !lambda |-
+                  char buf[8];
+                  sprintf(buf, "%.0f", id(schemerlamp_2_brightness)*100);
+                  return buf;
+
+            - lvgl.arc.update:
+                id: setpoint_arc
+                value: !lambda "return id(schemerlamp_2_brightness) * 100;"
+
+                
+            #- lvgl.indicator.update:
+            #    id: set_temp_needle  # het indicator ID in de meter
+            #    value: !lambda "return id(schemerlamp_2_brightness) * 100;"
+
+
+  - id: update_ha
+    then:
+      - lambda: |-
+          ESP_LOGD("UI", "Updating HA dimmer to %.0f %%", id(eettafel_brightness) * 100);
+      # update Home Assistant dimmer
+      - if:
+          condition: 
+            lambda: "return id(active_light_index) == 0;"
+          then:
+            - homeassistant.service:
+                service: light.turn_on
+                data:
+                  entity_id: light.eettafel
+                  brightness_pct: !lambda "return int(id(eettafel_brightness) * 100);"
+      - if:
+          condition: 
+            lambda: "return id(active_light_index) == 1;"
+          then:
+            - homeassistant.service:
+                service: light.turn_on
+                data:
+                  entity_id: light.schemerlamp_1
+                  brightness_pct: !lambda "return int(id(schemerlamp_1_brightness) * 100);"
+
+      - if:
+          condition: 
+            lambda: "return id(active_light_index) == 2;"
+          then:
+            - homeassistant.service:
+                service: light.turn_on
+                data:
+                  entity_id: light.schemerlamp_2
+                  brightness_pct: !lambda "return int(id(schemerlamp_2_brightness) * 100);"
+
+
+
+  - id: apply_ui_color
+    then:
+      - lvgl.arc.update:
+          id: setpoint_arc
+          arc_color: !lambda |-
+            return id(ui_color1);
+          indicator:
+            arc_color: !lambda |-
+              return id(ui_color2);
+            arc_width: 24
+            arc_rounded: true
+
+      - lvgl.widget.redraw
+
+
+
+  - id: cycle_lights
+    then:
+      - lambda: |-
+          id(active_light_index)++;
+          if (id(active_light_index) > 2) id(active_light_index) = 0;
+       
